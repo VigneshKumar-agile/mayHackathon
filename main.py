@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+from http.client import HTTPException
+import tempfile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import speech_recognition as sr
@@ -28,48 +30,46 @@ def save_text_to_file(text, file_path):
     with open(file_path, "w", encoding="utf-8") as file:
         file.write(text)
 
-async def audio_to_text():
+def audio_to_text(audio_file):
     translator = Translator()
-    with sr.Microphone() as source:
-        print("Please speak into the microphone...")
-        # Adjust for ambient noise
-        recognizer.adjust_for_ambient_noise(source)
-        # Listen for audio input
-        audio = recognizer.listen(source)
-
+    with sr.AudioFile(audio_file.file) as source:
+        print("Transcribing audio...")
+        audio_data = recognizer.record(source)
+        
         try:
-            print("Transcribing audio...")
             # Use Google Speech Recognition to convert audio to text
-            text = recognizer.recognize_google(audio)
+            text = recognizer.recognize_google(audio_data)
             print("You said:", text)
-            translated_text = translator.translate(text, dest='ta')
-            save_text_to_file(translated_text.text, "tamilConvert.txt")  # 'ta' is Tamil code
-            print(translated_text)
- 
+            
+            # Translate the text to Tamil
+            translated_text = translator.translate(text, dest='ta').text
+            print("Translated to Tamil:", translated_text)
+            
             # Text to Speech (Tamil)
-            tts = gTTS(text=translated_text.text, lang='ta')
-            # if os.path.exists("output.mp3"):
-            #     print("slkdjflks")
-            #     os.remove("output.mp3")
-            tts.save("output.mp3")  # Save as MP3 file
-            os.system("output.mp3")
-            print("Tamil audio generated! Saved as output.mp3")
-            return text
+            tts = gTTS(text=translated_text, lang='ta')
+            output_file_path = "output.mp3"
+            # tts.save(output_file_path)  # Save as MP3 file
+            # print("Tamil audio generated! Saved as output.mp3")
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
+                temp_file_path = temp_file.name
+                tts.save(temp_file_path)
+                print("Tamil audio generated! Saved as", temp_file_path)
+            
+            return output_file_path
         except sr.UnknownValueError:
-            print("Sorry, I could not understand the audio.")
-            return "Sorry, I could not understand the audio."
-        except sr.RequestError as e:
-            print("Error occurred: ", str(e))
-            return "Error occurred: " + str(e)
+            raise HTTPException(status_code=400, detail="Sorry, I could not understand the audio.")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error occurred: {str(e)}")
 
-# Define a route to handle audio input and return text
-@app.get("/audio-to-text")
-async def convert_audio_to_text():
-    file_path = await audio_to_text()
-    if file_path:
-        audioOutput = "output.mp3"
-        return  FileResponse(audioOutput,media_type="audio/mpeg")
+@app.post("/convert-audio")
+async def convert_audio(upload_file: UploadFile = File(...)):
+    if upload_file.content_type.startswith('audio/'):
+        file_path =  audio_to_text(upload_file)
+        print(file_path)
+        return FileResponse(file_path, media_type="audio/mpeg",filename="output.mp3")
+    else:
+        raise HTTPException(status_code=415, detail="Unsupported Media Type (only audio files supported)")
     
 
-# if __name__ == "__m_":
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
